@@ -1092,7 +1092,7 @@
     <string name="pif_no_config">No hay ninguna configuración cargada</string>
     <string name="pif_config_loaded">Configuración cargada</string>
     <string name="pif_auto_fetch_title">Obtener automáticamente el último PIF Canary</string>
-    <string name="pif_auto_fetch_summary">Obtener y aplicar automáticamente la huella digital Canary más reciente y sin bloquear</string>
+    <string name="pif_auto_fetch_summary">Obtener y aplicar automáticamente la huella digital Canary más reciente y sin bloquear · Made with ❤ by Yuki</string>
     <string name="pif_advanced_category_title">Opciones avanzadas</string>
     <string name="pif_manual_select_device_title">Seleccionar dispositivo Canary específico</string>
     <string name="pif_manual_select_device_summary">Elegir manualmente un modelo de dispositivo específico de la lista de compilaciones Canary de Google</string>
@@ -1115,7 +1115,8 @@
     <string name="pif_select_device">Seleccionar dispositivo</string>
     <string name="pif_generating">Generando configuración…</string>
     <string name="pif_footer_title">Superar la integridad básica</string>
-    <string name="pif_footer_body">1. Toca \"Obtener automáticamente el último PIF Canary\" para obtener y activar la huella digital de Google Canary más reciente y sin bloquear.\n2. Toca \"Configuración activa\" para ver propiedades detalladas, antigüedad de lanzamiento y estado de caducidad.\n3. Activa \"Autorrenovar al caducar\" para permitir la renovación automática en segundo plano al conectar el cargador con Wi-Fi (sin impacto en la batería).\n\nSi prefieres configuraciones personalizadas, puedes importar tu propio archivo JSON o .prop mediante \"Importar configuración\".</string>
+    <string name="pif_footer_body">Made with ❤ by Yuki\n\n1. Toca \"Obtener automáticamente el último PIF Canary\" para obtener y activar la huella digital de Google Canary más reciente y sin bloquear.\n2. Toca \"Configuración activa\" para ver propiedades detalladas, antigüedad de lanzamiento y estado de caducidad.\n3. Activa \"Autorrenovar al caducar\" para permitir la renovación automática en segundo plano al conectar el cargador con Wi-Fi (sin impacto en la batería).\n\nSi prefieres configuraciones personalizadas, puedes importar tu propio archivo JSON o .prop mediante \"Importar configuración\".</string>
+    <string name="pif_crafted_by">Made with ❤ by Yuki</string>
     <string name="pif_select_channel">Seleccionar canal</string>
     <string name="pif_channel_latest_release">Última versión</string>
     <string name="pif_channel_canary_release">Versión canary</string>
