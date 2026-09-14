@@ -181,7 +181,7 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
                     is PifFetchResult.Success -> {
                         savePifResult(requireContext(), result, isManual = false)
                         if (!silent) {
-                            toast(getString(R.string.pif_fetched_model, result.model))
+                            toast("${getString(R.string.pif_fetched_model, result.model)}\n${getString(R.string.pif_crafted_by)}")
                         }
                         refreshStatus()
                     }
@@ -243,7 +243,7 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
                 when (result) {
                     is PifFetchResult.Success -> {
                         savePifResult(requireContext(), result, isManual = false)
-                        toast(getString(R.string.pif_fetched_model, result.model))
+                        toast("${getString(R.string.pif_fetched_model, result.model)}\n${getString(R.string.pif_crafted_by)}")
                         refreshStatus()
                     }
                     is PifFetchResult.Error -> toast(getString(R.string.pif_failed, result.message))
