@@ -172,7 +172,12 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
                     return@launch
                 }
 
-                val optimalDevice = selectOptimalDevice(devices)
+                val currentRaw = Settings.Secure.getString(requireContext().contentResolver, PIF_CONFIG_KEY)
+                val currentDevice = try {
+                    if (!currentRaw.isNullOrEmpty()) JSONObject(currentRaw).optString("DEVICE", "").takeIf { it.isNotEmpty() } else null
+                } catch (_: Exception) { null }
+
+                val optimalDevice = selectOptimalDevice(devices, currentDevice)
                 val result = withContext(Dispatchers.IO) {
                     buildCanaryPifFromDevice(optimalDevice, apiKey)
                 }
@@ -480,15 +485,35 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
         fun isValidFingerprint(fp: String): Boolean =
             Regex("""^[^/]+/[^/]+/[^:]+:[^/]+/[^/]+/[^:]+:[^/]+/[^:]+$""").matches(fp)
 
-        fun selectOptimalDevice(devices: List<PifDevice>): PifDevice {
+        fun selectOptimalDevice(devices: List<PifDevice>, currentDevice: String? = null): PifDevice {
+            if (devices.isEmpty()) throw IllegalArgumentException("No devices available")
+
+            // 1. If running on actual Pixel hardware present in the list, keep own identity
             val hostDevice = SystemProperties.get("ro.product.device", "")
             devices.firstOrNull { it.device.equals(hostDevice, ignoreCase = true) }?.let { return it }
 
-            val preferredOrder = listOf("komodo", "caiman", "tokay", "husky", "shiba", "akita")
-            for (preferred in preferredOrder) {
-                devices.firstOrNull { it.device.equals(preferred, ignoreCase = true) }?.let { return it }
+            // 2. Define priority tiers:
+            // Tier 1: Modern Mainstream Flagships (Pixel 9 and 8 series)
+            val tier1 = setOf("komodo", "caiman", "tokay", "husky", "shiba", "akita")
+            // Tier 2: Previous Generation (Pixel 7 series)
+            val tier2 = setOf("cheetah", "panther", "lynx")
+
+            // Helper to pick randomly from a candidate pool, excluding the currently active device to ensure rotation
+            fun pickFrom(pool: List<PifDevice>): PifDevice? {
+                val candidates = pool.filterNot { it.device.equals(currentDevice, ignoreCase = true) }
+                return if (candidates.isNotEmpty()) candidates.random() else pool.randomOrNull()
             }
-            return devices.random()
+
+            // Prioritize Tier 1 with smart rotation
+            val t1 = devices.filter { it.device.lowercase() in tier1 }
+            pickFrom(t1)?.let { return it }
+
+            // Fallback to Tier 2 with rotation
+            val t2 = devices.filter { it.device.lowercase() in tier2 }
+            pickFrom(t2)?.let { return it }
+
+            // Final fallback to any available device
+            return pickFrom(devices) ?: devices.random()
         }
 
         fun fetchAvailableCanaryDevices(): Pair<List<PifDevice>, String?> {
@@ -702,7 +727,12 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
             val (devices, apiKey) = fetchAvailableCanaryDevices()
             if (devices.isEmpty() || apiKey.isNullOrEmpty()) return false
 
-            val optimalDevice = selectOptimalDevice(devices)
+            val currentRaw = Settings.Secure.getString(context.contentResolver, PIF_CONFIG_KEY)
+            val currentDevice = try {
+                if (!currentRaw.isNullOrEmpty()) JSONObject(currentRaw).optString("DEVICE", "").takeIf { it.isNotEmpty() } else null
+            } catch (_: Exception) { null }
+
+            val optimalDevice = selectOptimalDevice(devices, currentDevice)
             val result = buildCanaryPifFromDevice(optimalDevice, apiKey)
 
             if (result is PifFetchResult.Success) {
