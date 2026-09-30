@@ -67,6 +67,7 @@ import com.android.internal.logging.nano.MetricsProto
 import com.android.settings.R
 import com.android.settings.SettingsPreferenceFragment
 import com.android.settingslib.spa.framework.theme.SettingsTheme
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -281,23 +282,28 @@ private fun TrickyStoreAppSettingsContent(
                     !(isSystem && isSuffixExcluded) && !isDetector
                 },
             )
-                .sortedWith(targetedFirstComparator(pm, targeted))
-                .map { app ->
-                    TrickyAppState(
-                        entry = AppListEntry(
-                            packageName = app.packageName,
-                            label = pm.getApplicationLabel(app).toString(),
-                            icon = runCatching { pm.getApplicationIcon(app) }.getOrNull(),
-                            isSystem = app.flags and ApplicationInfo.FLAG_SYSTEM != 0,
-                            isSelected = targetMap.containsKey(app.packageName),
-                        ),
-                        mode = targetMap[app.packageName] ?: TargetMode.AUTO,
-                    )
-                }
+
+            val mappedApps = installed.map { app ->
+                TrickyAppState(
+                    entry = AppListEntry(
+                        packageName = app.packageName,
+                        label = pm.getApplicationLabel(app).toString(),
+                        icon = runCatching { pm.getApplicationIcon(app) }.getOrNull(),
+                        isSystem = app.flags and ApplicationInfo.FLAG_SYSTEM != 0,
+                        isSelected = targetMap.containsKey(app.packageName),
+                    ),
+                    mode = targetMap[app.packageName] ?: TargetMode.AUTO,
+                )
+            }.sortedWith(
+                compareBy(
+                    { it.entry.packageName !in targeted },
+                    { it.entry.label.lowercase(Locale.getDefault()) },
+                )
+            )
 
             withContext(Dispatchers.Main) {
                 allApps.clear()
-                allApps.addAll(installed)
+                allApps.addAll(mappedApps)
                 isLoading = false
             }
         }
@@ -431,8 +437,10 @@ private fun TrickyStoreAppSettingsContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 val teeBroken = remember {
-                    android.security.trickystore.TrickyStoreService
-                        .getInstance().isTeeBroken()
+                    runCatching {
+                        android.security.trickystore.TrickyStoreService
+                            .getInstance().isTeeBroken()
+                    }.getOrDefault(false)
                 }
                 // Generate: wipe list, rebuild from all installed third-party
                 // apps, skipping detector/checker packages.
@@ -550,8 +558,10 @@ private fun TrickyStoreAppSettingsContent(
                                 val i = allApps.indexOfFirst {
                                     it.entry.packageName == state.entry.packageName }
                                 if (i >= 0) {
-                                    val teeBroken = android.security.trickystore
-                                        .TrickyStoreService.getInstance().isTeeBroken()
+                                    val teeBroken = runCatching {
+                                        android.security.trickystore
+                                            .TrickyStoreService.getInstance().isTeeBroken()
+                                    }.getOrDefault(false)
                                     // Pre-assign LEAF_HACK when TEE is broken so the
                                     // user doesn't have to manually switch mode after toggling.
                                     val defaultMode = when {
