@@ -224,6 +224,10 @@ private fun TrickyStoreAppSettingsContent(
 
     var searchQuery by remember { mutableStateOf("") }
     var showSystemApps by remember { mutableStateOf(false) }
+    // When on, detector/checker packages (normally hidden from the picker) are
+    // listed so they can be found in search and manually targeted. They stay
+    // out of the auto Generate/Merge sets regardless.
+    var showRiskyApps by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
     val allApps = remember { mutableStateListOf<TrickyAppState>() }
 
@@ -261,7 +265,7 @@ private fun TrickyStoreAppSettingsContent(
         )
     }
 
-    LaunchedEffect(showSystemApps) {
+    LaunchedEffect(showSystemApps, showRiskyApps) {
         isLoading = true
         withContext(Dispatchers.IO) {
             val pm = context.packageManager
@@ -275,11 +279,13 @@ private fun TrickyStoreAppSettingsContent(
                 extraFilter = { app ->
                     val isSystem = app.flags and ApplicationInfo.FLAG_SYSTEM != 0
                     val isSuffixExcluded = EXCLUDED_SUFFIXES.any { app.packageName.contains(it) }
-                    // Also hide known root/integrity detector apps from the
-                    // picker entirely — they should never be in target.txt.
+                    // Known root/integrity detector apps are hidden from the
+                    // picker by default (they should rarely be in target.txt),
+                    // but can be revealed with the "risky apps" toggle so they
+                    // can be found and manually targeted when the user wants to.
                     val isDetector = app.packageName in
                         TrickyStoreAppSettings.DETECTOR_PACKAGES
-                    !(isSystem && isSuffixExcluded) && !isDetector
+                    !(isSystem && isSuffixExcluded) && (showRiskyApps || !isDetector)
                 },
             )
 
@@ -356,7 +362,7 @@ private fun TrickyStoreAppSettingsContent(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 FilterChip(
@@ -364,6 +370,20 @@ private fun TrickyStoreAppSettingsContent(
                     onClick = { showSystemApps = !showSystemApps },
                     label = { Text(stringResource(R.string.show_system_apps)) },
                     leadingIcon = if (showSystemApps) {
+                        {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    } else null,
+                )
+                FilterChip(
+                    selected = showRiskyApps,
+                    onClick = { showRiskyApps = !showRiskyApps },
+                    label = { Text(stringResource(R.string.ts_show_risky_apps)) },
+                    leadingIcon = if (showRiskyApps) {
                         {
                             Icon(
                                 Icons.Default.Check,
