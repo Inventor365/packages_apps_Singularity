@@ -1143,6 +1143,7 @@
     <string name="ts_keybox_deleted">Keybox deleted</string>
     <string name="ts_target_configuration">Target configuration</string>
     <string name="ts_manage_target_apps">Manage target apps</string>
+    <string name="ts_show_risky_apps">Show risky apps</string>
     <string name="ts_no_targets">No target apps configured</string>
     <string name="ts_target_apps_count">%d apps configured</string>
     <string name="ts_import_target_list">Import target list</string>
