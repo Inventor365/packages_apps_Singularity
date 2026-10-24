@@ -17,6 +17,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.SwitchPreferenceCompat
@@ -56,6 +57,8 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activeConfigData: Map<String, String> = emptyMap()
 
+    private enum class PifChannel { LATEST_RELEASE, CANARY }
+
     private val importLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -73,6 +76,7 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
                     }
                     val stamped = JSONObject(normalized).apply {
                         put("manually_imported", true)
+                        putDefaultSpoofFlags()
                     }.toString(2)
                     Settings.Secure.putString(
                         requireContext().contentResolver,
@@ -141,7 +145,60 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
             PifAutoUpdateJobService.schedule(requireContext())
         }
 
+        setupFlagPreferences()
         refreshStatus()
+    }
+
+    private fun setupFlagPreferences() {
+        FLAG_PREFS.forEach { (prefKey, configKey) ->
+            findPreference<SwitchPreferenceCompat>(prefKey)?.setOnPreferenceChangeListener { _, newValue ->
+                updateConfigFlag(configKey, (newValue as Boolean).toString())
+                false
+            }
+        }
+
+        findPreference<ListPreference>(PREF_VERBOSE_LOGS)?.setOnPreferenceChangeListener { _, newValue ->
+            updateConfigFlag(KEY_VERBOSE_LOGS, newValue as String)
+            false
+        }
+    }
+
+    private fun updateConfigFlag(key: String, value: String) {
+        try {
+            val resolver = requireContext().contentResolver
+            val raw = Settings.Secure.getString(resolver, PIF_CONFIG_KEY)
+            if (raw.isNullOrBlank()) {
+                toast(getString(R.string.pif_no_config))
+                return
+            }
+            val json = JSONObject(normalizePifPayload(raw))
+            json.put(key, value)
+            Settings.Secure.putString(resolver, PIF_CONFIG_KEY, json.toString(2))
+            killGms(requireContext())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update $key", e)
+            toast(getString(R.string.pif_failed, e.message ?: ""))
+        }
+        refreshStatus()
+    }
+
+    private fun refreshFlagPreferences(data: Map<String, String>, configExists: Boolean) {
+        findPreference<PreferenceCategory>("pif_flags_category")?.isEnabled = configExists
+
+        fun flagValue(key: String) = isTrue(data[key] ?: DEFAULT_SPOOF_FLAGS[key] ?: "false")
+
+        FLAG_PREFS.forEach { (prefKey, configKey) ->
+            findPreference<SwitchPreferenceCompat>(prefKey)?.isChecked = flagValue(configKey)
+        }
+
+        findPreference<SwitchPreferenceCompat>(PREF_VENDING_SDK)?.isEnabled =
+            !flagValue(KEY_VENDING_BUILD)
+
+        findPreference<ListPreference>(PREF_VERBOSE_LOGS)?.apply {
+            val stored = data[KEY_VERBOSE_LOGS] ?: DEFAULT_VERBOSE_LOGS
+            value = if (findIndexOfValue(stored) >= 0) stored else DEFAULT_VERBOSE_LOGS
+            summary = entry
+        }
     }
 
     override fun onDestroy() {
@@ -167,19 +224,22 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
         scope.launch {
             try {
                 val (devices, apiKey) = withContext(Dispatchers.IO) { fetchAvailableCanaryDevices() }
-                if (devices.isEmpty() || apiKey.isNullOrEmpty()) {
-                    if (!silent) toast(getString(R.string.pif_failed, getString(R.string.pif_no_devices_found)))
-                    return@launch
-                }
-
                 val currentRaw = Settings.Secure.getString(requireContext().contentResolver, PIF_CONFIG_KEY)
                 val currentDevice = try {
                     if (!currentRaw.isNullOrEmpty()) JSONObject(currentRaw).optString("DEVICE", "").takeIf { it.isNotEmpty() } else null
                 } catch (_: Exception) { null }
 
-                val optimalDevice = selectOptimalDevice(devices, currentDevice)
-                val result = withContext(Dispatchers.IO) {
-                    buildCanaryPifFromDevice(optimalDevice, apiKey)
+                val result = if (devices.isNotEmpty() && !apiKey.isNullOrEmpty()) {
+                    val optimalDevice = selectOptimalDevice(devices, currentDevice)
+                    withContext(Dispatchers.IO) { buildCanaryPifFromDevice(optimalDevice, apiKey) }
+                } else {
+                    val betaDevices = withContext(Dispatchers.IO) { fetchAvailableDevices() }
+                    if (betaDevices.isEmpty()) {
+                        if (!silent) toast(getString(R.string.pif_failed, getString(R.string.pif_no_devices_found)))
+                        return@launch
+                    }
+                    val optimalDevice = selectOptimalDevice(betaDevices, currentDevice)
+                    withContext(Dispatchers.IO) { buildPifFromDevice(optimalDevice) }
                 }
 
                 when (result) {
@@ -206,23 +266,45 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
     // ---- Manual Device Picker (Advanced) -----------------------------------
 
     private fun showManualDeviceSelectionDialog() {
+        val channels = arrayOf(
+            getString(R.string.pif_channel_canary_release),
+            getString(R.string.pif_channel_latest_release)
+        )
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.pif_select_channel)
+            .setItems(channels) { _, which ->
+                val channel = if (which == 0) PifChannel.CANARY else PifChannel.LATEST_RELEASE
+                fetchDevicesForChannel(channel)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun fetchDevicesForChannel(channel: PifChannel) {
         val pref = findPreference<Preference>("pif_manual_select_device")
         pref?.isEnabled = false
         pref?.summary = getString(R.string.pif_fetching)
 
         scope.launch {
             try {
-                val (devices, apiKey) = withContext(Dispatchers.IO) { fetchAvailableCanaryDevices() }
-                if (devices.isEmpty() || apiKey.isNullOrEmpty()) {
+                val (devices, apiKey) = withContext(Dispatchers.IO) {
+                    when (channel) {
+                        PifChannel.LATEST_RELEASE -> fetchAvailableDevices() to null
+                        PifChannel.CANARY -> fetchAvailableCanaryDevices()
+                    }
+                }
+                if (devices.isEmpty() || (channel == PifChannel.CANARY && apiKey.isNullOrEmpty())) {
                     toast(getString(R.string.pif_failed, getString(R.string.pif_no_devices_found)))
                     return@launch
                 }
 
                 val modelNames = devices.map { "${it.model} (${it.device})" }.toTypedArray()
+                val currentIndex = devices.indexOfFirst { it.device == activeConfigData["DEVICE"] }
                 AlertDialog.Builder(requireContext())
                     .setTitle(R.string.pif_select_device)
-                    .setItems(modelNames) { _, which ->
-                        generateAndSavePif(devices[which], apiKey)
+                    .setSingleChoiceItems(modelNames, currentIndex) { dialog, which ->
+                        dialog.dismiss()
+                        generateAndSavePif(devices[which], channel, apiKey)
                     }
                     .setNegativeButton(android.R.string.cancel, null)
                     .show()
@@ -235,7 +317,7 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
         }
     }
 
-    private fun generateAndSavePif(device: PifDevice, apiKey: String) {
+    private fun generateAndSavePif(device: PifDevice, channel: PifChannel, apiKey: String?) {
         val fetchPref = findPreference<Preference>("pif_auto_fetch")
         fetchPref?.summary = getString(R.string.pif_generating)
         fetchPref?.isEnabled = false
@@ -243,7 +325,10 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
         scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    buildCanaryPifFromDevice(device, apiKey)
+                    when (channel) {
+                        PifChannel.LATEST_RELEASE -> buildPifFromDevice(device)
+                        PifChannel.CANARY -> buildCanaryPifFromDevice(device, apiKey ?: "")
+                    }
                 }
                 when (result) {
                     is PifFetchResult.Success -> {
@@ -323,6 +408,7 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
         }
 
         findPreference<Preference>("pif_delete_config")?.isEnabled = exists
+        refreshFlagPreferences(activeConfigData, exists)
         populateConfigDetails(activeConfigData)
     }
 
@@ -447,10 +533,58 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
         // osm0sis 42-day (6-week) Canary validity lifespan heuristic
         val CANARY_VALIDITY_WINDOW_MS = TimeUnit.DAYS.toMillis(42)
 
+        private val VERSIONS_REGEX =
+            Regex("""(?:https://developer\.android\.com)?/about/versions/(\d+)""")
+
+        private val DEVICE_ROW_REGEX = Regex(
+            """<tr id="([^"]+)">\s*<td[^>]*>([^<]+)</td>""",
+            RegexOption.DOT_MATCHES_ALL
+        )
+
+        private val API_KEY_REGEX = Regex("""AIza[0-9A-Za-z_-]{35}""")
+
+        private const val KEY_VENDING_BUILD = "spoofVendingBuild"
+        private const val KEY_VERBOSE_LOGS = "verboseLogs"
+        private const val DEFAULT_VERBOSE_LOGS = "0"
+        private const val PREF_VENDING_SDK = "pif_flag_spoof_vending_sdk"
+        private const val PREF_VERBOSE_LOGS = "pif_flag_verbose_logs"
+
+        private val FLAG_PREFS = linkedMapOf(
+            "pif_flag_spoof_build" to "spoofBuild",
+            "pif_flag_spoof_props" to "spoofProps",
+            "pif_flag_spoof_provider" to "spoofProvider",
+            "pif_flag_spoof_signature" to "spoofSignature",
+            "pif_flag_spoof_vending_build" to KEY_VENDING_BUILD,
+            PREF_VENDING_SDK to "spoofVendingSdk",
+            "pif_flag_debug" to "DEBUG",
+        )
+
+        private fun isTrue(value: String) = value == "1" || value.equals("true", ignoreCase = true)
+
+        private val PRESERVED_KEYS = listOf(
+            "spoofBuild", "spoofProps", "spoofProvider", "spoofSignature",
+            "spoofVendingBuild", "spoofVendingSdk", "DEBUG", "verboseLogs"
+        )
+
+        private val DEFAULT_SPOOF_FLAGS = linkedMapOf(
+            "spoofBuild" to "true",
+            "spoofProps" to "true",
+            "spoofProvider" to "false",
+            "spoofSignature" to "false",
+            "spoofVendingBuild" to "true",
+            "spoofVendingSdk" to "false",
+            "DEBUG" to "false",
+        )
+
+        private fun JSONObject.putDefaultSpoofFlags(): JSONObject = apply {
+            DEFAULT_SPOOF_FLAGS.forEach { (key, value) -> if (!has(key)) put(key, value) }
+        }
+
         data class PifDevice(
             val product: String,
             val device: String,
-            val model: String
+            val model: String,
+            val otaUrl: String = ""
         )
 
         sealed class PifFetchResult {
@@ -479,8 +613,24 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
             "blazer" to "Pixel 10 Pro",
             "mustang" to "Pixel 10 Pro XL",
             "rango" to "Pixel 10 Pro Fold",
-            "stallion" to "Pixel 10a"
+            "stallion" to "Pixel 10a",
+            "yogi" to "Pixel 11 Pro Fold",
+            "kodiak" to "Pixel 11 Pro XL",
+            "grizzly" to "Pixel 11 Pro",
+            "cubs" to "Pixel 11",
+            "formosan" to "Pixel 11a"
         )
+
+        private fun initialSdkIntFor(device: String): String = when (device) {
+            "oriole", "raven" -> "31"
+            "bluejay" -> "32"
+            "panther", "cheetah", "lynx", "felix", "tangorpro" -> "33"
+            "shiba", "husky", "akita", "tokay", "caiman", "komodo", "comet" -> "34"
+            "tegu", "stallion" -> "35"
+            "frankel", "blazer", "mustang", "rango" -> "36"
+            "cubs", "grizzly", "kodiak", "yogi", "formosan" -> "37"
+            else -> "37"
+        }
 
         fun isValidFingerprint(fp: String): Boolean =
             Regex("""^[^/]+/[^/]+/[^:]+:[^/]+/[^/]+/[^:]+:[^/]+/[^:]+$""").matches(fp)
@@ -493,8 +643,8 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
             devices.firstOrNull { it.device.equals(hostDevice, ignoreCase = true) }?.let { return it }
 
             // 2. Define priority tiers:
-            // Tier 1: Modern Mainstream Flagships (Pixel 9 and 8 series)
-            val tier1 = setOf("komodo", "caiman", "tokay", "husky", "shiba", "akita")
+            // Tier 1: Modern Mainstream Flagships (Pixel 10, 9 and 8 series)
+            val tier1 = setOf("mustang", "blazer", "frankel", "komodo", "caiman", "tokay", "husky", "shiba", "akita")
             // Tier 2: Previous Generation (Pixel 7 series)
             val tier2 = setOf("cheetah", "panther", "lynx")
 
@@ -516,40 +666,149 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
             return pickFrom(devices) ?: devices.random()
         }
 
+        private fun fetchKnownVersions(): List<Int> {
+            val versionsHtml = URL("$GOOGLE_URL/about/versions").readText(StandardCharsets.UTF_8)
+            return VERSIONS_REGEX.findAll(versionsHtml)
+                .map { it.groupValues[1].toInt() }.toSet().sortedDescending()
+        }
+
+        private fun fetchPartialUrl(url: String, maxBytes: Int): String {
+            val conn = URL(url).openConnection()
+            conn.connectTimeout = 15000
+            conn.readTimeout = 15000
+            conn.getInputStream().use { input ->
+                val buf = ByteArray(512)
+                val sb = StringBuilder()
+                var total = 0
+                while (total < maxBytes) {
+                    val read = input.read(buf)
+                    if (read == -1) break
+                    sb.append(String(buf, 0, read, StandardCharsets.ISO_8859_1))
+                    total += read
+                }
+                return sb.toString()
+            }
+        }
+
+        fun fetchAvailableDevices(): List<PifDevice> {
+            val knownVersions = try { fetchKnownVersions() } catch (_: Exception) { return emptyList() }
+            val maxVersion = knownVersions.firstOrNull() ?: return emptyList()
+            val versions = listOf(maxVersion + 1) + knownVersions
+
+            for (version in versions) {
+                try {
+                    val downloadUrl = "$GOOGLE_URL/about/versions/$version/download-ota"
+                    val otaHtml = URL(downloadUrl).readText(StandardCharsets.UTF_8)
+                    val otaList = Regex("""href="(https://dl\.google\.com/[^"]*ota/([^/"]+_beta)[^"]*?)"""")
+                        .findAll(otaHtml).map { it.groupValues[1] to it.groupValues[2] }.toList()
+                    if (otaList.isEmpty()) continue
+
+                    val devices = mutableListOf<PifDevice>()
+                    val seen = mutableSetOf<String>()
+                    for ((otaUrl, product) in otaList) {
+                        val device = product.replace("_beta", "")
+                        if (!seen.add(device)) continue
+                        val model = DEVICE_MODEL_MAP[device] ?: device
+                        devices.add(PifDevice(product, device, model, otaUrl))
+                    }
+                    if (devices.isNotEmpty()) return devices
+                } catch (_: Exception) { continue }
+            }
+            return emptyList()
+        }
+
+        fun buildPifFromDevice(pifDevice: PifDevice): PifFetchResult {
+            return try {
+                val partial = fetchPartialUrl(pifDevice.otaUrl, 4096)
+                val fingerprint = Regex("""post-build=(.*)""").find(partial)?.groupValues?.get(1)?.trim()
+                    ?: return PifFetchResult.Error("Could not extract fingerprint")
+                val securityPatch = Regex("""security-patch-level=(.*)""").find(partial)?.groupValues?.get(1)?.trim()
+                    ?: return PifFetchResult.Error("Could not extract security patch")
+
+                val fpParts = fingerprint.split("/")
+                val release = fpParts.getOrNull(2)?.substringAfter(":", "") ?: ""
+                val buildId = fpParts.getOrNull(3) ?: ""
+                val (relDate, expDate) = fetchCanaryBuildMetadata(pifDevice.otaUrl)
+                val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+
+                val pifJson = JSONObject().apply {
+                    put("TYPE", "user")
+                    put("TAGS", "release-keys")
+                    put("ID", buildId)
+                    put("BRAND", "google")
+                    put("DEVICE", pifDevice.device)
+                    put("FINGERPRINT", fingerprint)
+                    put("MANUFACTURER", "Google")
+                    put("MODEL", pifDevice.model)
+                    put("PRODUCT", pifDevice.product)
+                    put("RELEASE", release)
+                    put("SECURITY_PATCH", securityPatch)
+                    put("DEVICE_INITIAL_SDK_INT", initialSdkIntFor(pifDevice.device))
+                    put("_RELEASE_TIMESTAMP", relDate.time.toString())
+                    put("_EXPIRY_TIMESTAMP", expDate.time.toString())
+                    put("_RELEASE_DATE", sdf.format(relDate))
+                    put("_EXPIRY_DATE", sdf.format(expDate))
+                }
+                PifFetchResult.Success(pifDevice.model, pifJson)
+            } catch (e: Exception) {
+                PifFetchResult.Error("Failed: ${e.message}")
+            }
+        }
+
+        private fun parseDeviceTable(html: String): List<PifDevice> {
+            val devices = mutableListOf<PifDevice>()
+            val seen = mutableSetOf<String>()
+            DEVICE_ROW_REGEX.findAll(html).forEach { match ->
+                val device = match.groupValues[1]
+                if (!seen.add(device)) return@forEach
+                val model = match.groupValues[2].trim()
+                    .ifEmpty { DEVICE_MODEL_MAP[device] ?: device }
+                devices.add(PifDevice(product = "${device}_beta", device = device, model = model, otaUrl = ""))
+            }
+            return devices
+        }
+
+        private fun extractFlashApiKey(html: String): String? {
+            val clientConfig = Regex("""data-client-config="([^"]*)"""").find(html)?.groupValues?.get(1)
+            return clientConfig?.let { API_KEY_REGEX.find(it)?.value }
+                ?: API_KEY_REGEX.find(html)?.value
+        }
+
         fun fetchAvailableCanaryDevices(): Pair<List<PifDevice>, String?> {
             return try {
-                val versionsHtml = URL("$GOOGLE_URL/about/versions").readText(StandardCharsets.UTF_8)
-                val knownVersions = Regex("""https://developer\.android\.com/about/versions/(\d+)""")
-                    .findAll(versionsHtml).map { it.groupValues[1].toInt() }.toSet().sortedDescending()
+                val knownVersions = fetchKnownVersions()
+                val maxVersion = knownVersions.firstOrNull() ?: return emptyList<PifDevice>() to null
+                val versions = listOf(maxVersion + 1) + knownVersions
 
-                val rowPattern = Regex("""<tr id="([^"]+)">\s*<td[^>]*>([^<]+)</td>""", RegexOption.DOT_MATCHES_ALL)
-
-                for (version in knownVersions) {
+                for (version in versions) {
                     try {
                         val latestHtml = URL("$GOOGLE_URL/about/versions/$version").readText(StandardCharsets.UTF_8)
-                        val qprPath = Regex("""href="(/about/versions/$version/qpr(\d+)/download-ota)"""")
-                            .findAll(latestHtml)
-                            .map { it.groupValues[2].toInt() to it.groupValues[1] }
-                            .maxByOrNull { it.first }
-                            ?.second ?: continue
+                        val pages = Regex(
+                            """href="(/about/versions/$version(?:/qpr(\d+))?/download(?:-ota)?)""""
+                        ).findAll(latestHtml)
+                            .map { it.groupValues[1] to (it.groupValues[2].toIntOrNull() ?: 0) }
+                            .toList()
+                        if (pages.isEmpty()) continue
 
-                        val fiHtml = URL("$GOOGLE_URL$qprPath").readText(StandardCharsets.UTF_8)
-                        val devices = mutableListOf<PifDevice>()
-                        val seen = mutableSetOf<String>()
-
-                        rowPattern.findAll(fiHtml).forEach { match ->
-                            val device = match.groupValues[1]
-                            if (device in seen) return@forEach
-                            seen.add(device)
-                            val model = match.groupValues[2].trim().ifEmpty { DEVICE_MODEL_MAP[device] ?: device }
-                            devices.add(PifDevice("${device}_beta", device, model))
-                        }
+                        val newestQpr = pages.maxOf { it.second }
+                        val devices = pages.filter { it.second == newestQpr }
+                            .map { it.first }
+                            .distinct()
+                            .mapNotNull { path ->
+                                try {
+                                    parseDeviceTable(URL("$GOOGLE_URL$path").readText(StandardCharsets.UTF_8))
+                                } catch (e: Exception) {
+                                    Log.d(TAG, "Failed to read $path: ${e.message}")
+                                    null
+                                }
+                            }
+                            .maxByOrNull { it.size }
+                            .orEmpty()
 
                         if (devices.isEmpty()) continue
 
                         val flashHtml = URL(FLASH_URL).readText(StandardCharsets.UTF_8)
-                        val apiKey = Regex("""AIza[0-9A-Za-z_-]{35}""").find(flashHtml)?.value
-                        return devices to apiKey
+                        return devices to extractFlashApiKey(flashHtml)
                     } catch (_: Exception) { continue }
                 }
                 emptyList<PifDevice>() to null
@@ -626,14 +885,14 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
                     put("MODEL", pifDevice.model)
                     put("PRODUCT", pifDevice.product)
                     put("DEVICE", pifDevice.device)
-                    put("RELEASE", "15")
+                    put("RELEASE", "CANARY")
                     put("ID", id)
                     put("INCREMENTAL", incremental)
                     put("TYPE", "user")
                     put("TAGS", "release-keys")
                     put("FINGERPRINT", fingerprint)
                     put("SECURITY_PATCH", securityPatch)
-                    put("DEVICE_INITIAL_SDK_INT", "32")
+                    put("DEVICE_INITIAL_SDK_INT", initialSdkIntFor(pifDevice.device))
                     // Freshness metadata
                     put("_RELEASE_TIMESTAMP", relDate.time.toString())
                     put("_EXPIRY_TIMESTAMP", expDate.time.toString())
@@ -680,7 +939,14 @@ class PlayIntegrityFix : SettingsPreferenceFragment() {
             val fp = result.pifData.optString("FINGERPRINT", "")
             if (!isValidFingerprint(fp)) return
 
+            val existingRaw = Settings.Secure.getString(context.contentResolver, PIF_CONFIG_KEY)
+            val existingData = if (!existingRaw.isNullOrEmpty()) readConfigData(existingRaw) else emptyMap()
+
             val toSave = JSONObject(result.pifData.toString()).apply {
+                PRESERVED_KEYS.forEach { key ->
+                    existingData[key]?.let { value -> put(key, value) }
+                }
+                putDefaultSpoofFlags()
                 put("manually_imported", isManual)
             }
 

@@ -102,13 +102,30 @@ class TrickyStoreAppSettings : SettingsPreferenceFragment() {
 
     companion object {
         const val TARGET_KEY = "spoof_trickystore_target"
-        val DEFAULT_TARGETS = setOf(
-            "com.google.android.gms",
-            "com.android.vending",
-        )
-        val DEFAULT_TARGET_MODES = mapOf(
-            "com.revolut.revolut" to TargetMode.CERT_GEN,
-        )
+
+        val DEFAULT_TARGET_MAP: Map<String, TargetMode> =
+            parseTargetList(android.security.trickystore.TrickyStoreService.DEFAULT_TARGET_LIST)
+
+        val DEFAULT_TARGETS: Set<String> = DEFAULT_TARGET_MAP.keys
+
+        val DEFAULT_TARGET_MODES: Map<String, TargetMode> =
+            DEFAULT_TARGET_MAP.filterValues { it != TargetMode.AUTO }
+
+        fun parseTargetList(list: String?): Map<String, TargetMode> {
+            val result = LinkedHashMap<String, TargetMode>()
+            if (list.isNullOrEmpty()) return result
+            list.lines().forEach { raw ->
+                val t = raw.trim()
+                if (t.isEmpty() || t.startsWith("#")) return@forEach
+                when {
+                    t.endsWith("?") -> result[t.dropLast(1).trim()] = TargetMode.LEAF_HACK
+                    t.endsWith("!") -> result[t.dropLast(1).trim()] = TargetMode.CERT_GEN
+                    t.endsWith("-") -> result[t.dropLast(1).trim()] = TargetMode.SKIP
+                    else -> result[t] = TargetMode.AUTO
+                }
+            }
+            return result
+        }
 
         // Apps that should never appear in target.txt — root/integrity detectors
         // and attestation checkers that would flag themselves if targeted.
@@ -231,28 +248,12 @@ private fun TrickyStoreAppSettingsContent(
     var isLoading by remember { mutableStateOf(true) }
     val allApps = remember { mutableStateListOf<TrickyAppState>() }
 
-    fun loadTargetMap(): Map<String, TargetMode> {
-        val result = mutableMapOf<String, TargetMode>()
-        val content = Settings.Secure.getString(
-            context.contentResolver, TrickyStoreAppSettings.TARGET_KEY,
-        ) ?: return result
-        content.lines().forEach { line ->
-            val trimmed = line.trim()
-            if (trimmed.isNotBlank()) {
-                when {
-                    trimmed.endsWith("?") ->
-                        result[trimmed.dropLast(1)] = TargetMode.LEAF_HACK
-                    trimmed.endsWith("!") ->
-                        result[trimmed.dropLast(1)] = TargetMode.CERT_GEN
-                    trimmed.endsWith("-") ->
-                        result[trimmed.dropLast(1)] = TargetMode.SKIP
-                    else ->
-                        result[trimmed] = TargetMode.AUTO
-                }
-            }
-        }
-        return result
-    }
+    fun loadTargetMap(): Map<String, TargetMode> =
+        TrickyStoreAppSettings.parseTargetList(
+            Settings.Secure.getString(
+                context.contentResolver, TrickyStoreAppSettings.TARGET_KEY,
+            ),
+        )
 
     fun saveTargets() {
         val lines = allApps
