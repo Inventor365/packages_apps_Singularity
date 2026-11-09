@@ -130,7 +130,15 @@ internal class DuckRkpPreferenceController(
             imported -> fragment.getString(R.string.ts_rkp_imported)
             !available -> fragment.getString(R.string.ts_rkp_unavailable)
             !enabled -> fragment.getString(R.string.ts_rkp_disabled)
-            !current.getString("error").isNullOrEmpty() -> error(current)
+            !current.getString("error").isNullOrEmpty() -> when {
+                current.getBoolean("automatic_paused") -> fragment.getString(
+                    R.string.ts_rkp_auto_paused, error(current))
+                current.getLong("next_automatic_at") > 0 -> fragment.getString(
+                    R.string.ts_rkp_auto_retry, error(current),
+                    DateFormat.getDateTimeInstance().format(
+                        Date(current.getLong("next_automatic_at"))))
+                else -> error(current)
+            }
             busy -> fragment.getString(when (current.getString("stage")) {
                 "fetching" -> R.string.ts_rkp_fetching
                 "signing" -> R.string.ts_rkp_signing
@@ -138,7 +146,10 @@ internal class DuckRkpPreferenceController(
                 else -> R.string.ts_rkp_hardware
             })
             current.getBoolean("active") -> fragment.getString(R.string.ts_rkp_ready,
-                DateFormat.getDateTimeInstance().format(Date(current.getLong("expires_at"))))
+                DateFormat.getDateTimeInstance().format(Date(current.getLong("expires_at"))),
+                DateFormat.getDateTimeInstance().format(Date(current.getLong("renew_at"))))
+            current.getBoolean("waiting_for_network") ->
+                fragment.getString(R.string.ts_rkp_waiting_network)
             current.getLong("expires_at") in 1..System.currentTimeMillis() ->
                 fragment.getString(R.string.ts_rkp_expired)
             else -> fragment.getString(R.string.ts_rkp_idle)
@@ -146,14 +157,17 @@ internal class DuckRkpPreferenceController(
     }
 
     private fun error(current: Bundle): String = when (current.getString("error")) {
-        "hal_rejected" -> fragment.getString(R.string.ts_rkp_hal_rejected, current.getInt("detail"))
+        "hal_rejected", "native_rejected" -> fragment.getString(R.string.ts_rkp_hal_rejected, current.getInt("detail"))
+        "native_unavailable" -> fragment.getString(R.string.ts_rkp_native_unavailable)
+        "native_transport" -> fragment.getString(R.string.ts_rkp_native_transport)
+        "invalid_hal_response" -> fragment.getString(R.string.ts_rkp_invalid_response)
         "http_error" -> fragment.getString(R.string.ts_rkp_http_error, current.getInt("detail"))
         "hal_unsupported", "hal_unavailable", "missing_eek" ->
             fragment.getString(R.string.ts_rkp_unsupported)
         "network_error" -> fragment.getString(R.string.ts_rkp_network_error)
         "submission_unknown" -> fragment.getString(R.string.ts_rkp_submission_unknown)
         "certificate_invalid", "stored_key_invalid" -> fragment.getString(R.string.ts_rkp_invalid_chain)
-        "timeout" -> fragment.getString(R.string.ts_rkp_timeout)
+        "timeout", "native_timeout" -> fragment.getString(R.string.ts_rkp_timeout)
         "canceled" -> fragment.getString(R.string.ts_rkp_canceled)
         "save_failed" -> fragment.getString(R.string.ts_rkp_save_failed)
         else -> fragment.getString(R.string.ts_rkp_action_failed)
