@@ -61,6 +61,9 @@ public class Themes extends SettingsPreferenceFragment implements
     private static final String KEY_FORCE_FULL_SCREEN = "display_cutout_force_fullscreen_settings";
     private static final String KEY_VOLUME_DIALOG_TYPE = "volume_dialog_type";
     private static final String KEY_QUICKSWITCH = "quickswitch";
+    private static final String KEY_PIXEL_LAUNCHER_ENHANCED = "pixel_launcher_enhanced";
+    private static final String PLE_PACKAGE = "com.drdisagree.pixellauncherenhanced";
+    private static final String QUICKSWITCH_PROP = "persist.sys.default_launcher";
     private static final String KEY_SHOW_VOLUME_PERCENTAGE = "show_volume_percentage";
     private static final String KEY_AXION_VOLUME_STYLE = "compose_volume_style";
     private static final String KEY_LOCK_GLYMPS = "lock_glymps_enabled";
@@ -74,6 +77,7 @@ public class Themes extends SettingsPreferenceFragment implements
 
     private Preference mShowCutoutForce;
     private Preference mQuickSwitch;
+    private Preference mPixelLauncherEnhanced;
     private SystemSettingListPreference mVolumeDialogType;
     private SystemSettingSwitchPreference mCompactVolumePill;
     private SystemSettingListPreference mAxionVolumeStyle;
@@ -106,10 +110,20 @@ public class Themes extends SettingsPreferenceFragment implements
         }
 
         mQuickSwitch = (Preference) prefScreen.findPreference(KEY_QUICKSWITCH);
+        mPixelLauncherEnhanced = (Preference) prefScreen.findPreference(KEY_PIXEL_LAUNCHER_ENHANCED);
         boolean withGoogleApps = android.os.SystemProperties.getBoolean("persist.sys.with_google_apps", false);
-        if (!withGoogleApps)
-            prefScreen.removePreference(mQuickSwitch);
-
+        boolean pixelShipped = android.os.SystemProperties.getInt("persist.sys.quickswitch_pixel_shipped", 0) != 0;
+        if (!withGoogleApps) {
+            if (mQuickSwitch != null) prefScreen.removePreference(mQuickSwitch);
+        }
+        if (mPixelLauncherEnhanced != null) {
+            if (!withGoogleApps || !pixelShipped || !isPackageInstalled(mContext, PLE_PACKAGE)) {
+                prefScreen.removePreference(mPixelLauncherEnhanced);
+                mPixelLauncherEnhanced = null;
+            } else {
+                updatePixelLauncherEnhancedPreference();
+            }
+        }
         mVolumeDialogType = findPreference(KEY_VOLUME_DIALOG_TYPE);
         if (mVolumeDialogType != null) {
             mVolumeDialogType.setOnPreferenceChangeListener(this);
@@ -151,6 +165,7 @@ public class Themes extends SettingsPreferenceFragment implements
             mUnlockAnimation.setValue(Integer.toString(unlockAnimation));
         }
         updateUnlockRelatedVisibility(unlockAnimation);
+        updatePixelLauncherEnhancedPreference();
     }
 
     private int getCurrentUnlockAnimation() {
@@ -217,7 +232,58 @@ public class Themes extends SettingsPreferenceFragment implements
         if (preference != null && preference.getKey() != null) {
             VibrationUtils.triggerVibration(getContext(), 3);
         }
+        if (preference != null && KEY_PIXEL_LAUNCHER_ENHANCED.equals(preference.getKey())) {
+            handlePixelLauncherEnhancedClick();
+            return true;
+        }
         return super.onPreferenceTreeClick(preference);
+    }
+
+    private void updatePixelLauncherEnhancedPreference() {
+        if (mPixelLauncherEnhanced == null) return;
+        boolean isPixelActive = android.os.SystemProperties.getInt(QUICKSWITCH_PROP, 0) == 1;
+        mPixelLauncherEnhanced.setSummary(isPixelActive
+                ? R.string.pixel_launcher_enhanced_summary_active
+                : R.string.pixel_launcher_enhanced_summary_warning);
+    }
+
+    private void handlePixelLauncherEnhancedClick() {
+        Context context = getContext();
+        if (context == null) return;
+        boolean isPixelActive = android.os.SystemProperties.getInt(QUICKSWITCH_PROP, 0) == 1;
+        if (isPixelActive) {
+            launchPixelLauncherEnhanced(context);
+            return;
+        }
+        new android.app.AlertDialog.Builder(context)
+                .setTitle(R.string.pixel_launcher_enhanced_warning_title)
+                .setMessage(R.string.pixel_launcher_enhanced_warning_message)
+                .setPositiveButton(R.string.pixel_launcher_enhanced_switch_action, (dialog, which) -> {
+                    Intent intent = new Intent();
+                    intent.setClassName("com.android.settings", "com.android.settings.SubSettings");
+                    intent.putExtra(":settings:show_fragment",
+                            "org.lunaris.settings.fragments.miscellaneous.QuickSwitch");
+                    startActivity(intent);
+                })
+                .setNegativeButton(R.string.pixel_launcher_enhanced_open_anyway, (dialog, which) ->
+                        launchPixelLauncherEnhanced(context))
+                .show();
+    }
+
+    private static void launchPixelLauncherEnhanced(Context context) {
+        Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(PLE_PACKAGE);
+        if (launchIntent != null) {
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(launchIntent);
+        }
+    }
+
+    private static boolean isPackageInstalled(Context context, String packageName) {
+        try {
+            return context.getPackageManager().getApplicationInfo(packageName, 0).enabled;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @Override
@@ -240,8 +306,13 @@ public class Themes extends SettingsPreferenceFragment implements
                     }
 
                     boolean withGoogleApps = android.os.SystemProperties.getBoolean("persist.sys.with_google_apps", false);
-                    if (!withGoogleApps)
+                    boolean pixelShipped = android.os.SystemProperties.getInt("persist.sys.quickswitch_pixel_shipped", 0) != 0;
+                    if (!withGoogleApps) {
                         keys.add(KEY_QUICKSWITCH);
+                    }
+                    if (!withGoogleApps || !pixelShipped || !isPackageInstalled(context, PLE_PACKAGE)) {
+                        keys.add(KEY_PIXEL_LAUNCHER_ENHANCED);
+                    }
 
                     return keys;
                 }

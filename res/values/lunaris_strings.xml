@@ -1535,6 +1535,15 @@
         External launcher modules/modifications must be adapted to the QuickSwitch structure to function properly.
     </string>
 
+    <!-- Pixel Launcher Enhancements -->
+    <string name="pixel_launcher_enhanced_title">Pixel Launcher Enhancements</string>
+    <string name="pixel_launcher_enhanced_summary_active">Customize Pixel Launcher layout, icons, dock, drawer, and gestures</string>
+    <string name="pixel_launcher_enhanced_summary_warning">Pixel Launcher is not selected. Switch to Pixel Launcher in Quick Switch to apply mods.</string>
+    <string name="pixel_launcher_enhanced_warning_title">Pixel Launcher Required</string>
+    <string name="pixel_launcher_enhanced_warning_message">Pixel Launcher Enhancements only apply when Pixel Launcher is selected as your launcher. Switch from Lunaris Launcher to Pixel Launcher in Quick Switch and restart your device for modifications to take effect.</string>
+    <string name="pixel_launcher_enhanced_switch_action">Switch to Pixel Launcher</string>
+    <string name="pixel_launcher_enhanced_open_anyway">Open anyway</string>
+
     <!-- Floating rotation button -->
     <string name="floating_rotation_button_title">Floating rotate button</string>
     <string name="floating_rotation_button_summary">Show a floating rotate button when device is rotated</string>

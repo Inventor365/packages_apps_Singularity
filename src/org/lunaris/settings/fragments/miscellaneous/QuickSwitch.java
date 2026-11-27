@@ -50,8 +50,11 @@ public class QuickSwitch extends SettingsPreferenceFragment
 
     private static final String QUICKSWITCH_KEY = "persist.sys.default_launcher";
     private static final String WALLPAPER_OVERLAY = "com.android.system.qs.wallpaperoverlay";
-    
+    private static final String KEY_PIXEL_LAUNCHER_ENHANCED = "pixel_launcher_enhanced";
+    private static final String PLE_PACKAGE = "com.drdisagree.pixellauncherenhanced";
+
     private ListPreference quickSwitchPref;
+    private Preference pixelLauncherEnhancedPref;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -78,8 +81,24 @@ public class QuickSwitch extends SettingsPreferenceFragment
         quickSwitchPref.setEntries(quickSwitchEntries.toArray(new CharSequence[0]));
         quickSwitchPref.setEntryValues(quickSwitchValues.toArray(new CharSequence[0]));
         quickSwitchPref.setValue(String.valueOf(defaultLauncher));
+
+        pixelLauncherEnhancedPref = findPreference(KEY_PIXEL_LAUNCHER_ENHANCED);
+        if (pixelLauncherEnhancedPref != null) {
+            boolean pixelShipped = SystemProperties.getInt("persist.sys.quickswitch_pixel_shipped", 0) != 0;
+            if (!pixelShipped || !isPackageInstalled(context, PLE_PACKAGE)) {
+                getPreferenceScreen().removePreference(pixelLauncherEnhancedPref);
+                pixelLauncherEnhancedPref = null;
+            } else {
+                updateEnhancedSummary(defaultLauncher);
+            }
+        }
     }
 
+    @Override
+    public void onResume() {
+        super.onResume();
+        updateEnhancedSummary(SystemProperties.getInt(QUICKSWITCH_KEY, 0));
+    }
     @Override
     public int getMetricsCategory() {
         return MetricsProto.MetricsEvent.VIEW_UNKNOWN;
@@ -90,6 +109,10 @@ public class QuickSwitch extends SettingsPreferenceFragment
         if (preference != null && preference.getKey() != null) {
             VibrationUtils.triggerVibration(getContext(), 3);
         }
+        if (preference != null && KEY_PIXEL_LAUNCHER_ENHANCED.equals(preference.getKey())) {
+            handlePixelLauncherEnhancedClick();
+            return true;
+        }
         return super.onPreferenceTreeClick(preference);
     }
 
@@ -97,18 +120,70 @@ public class QuickSwitch extends SettingsPreferenceFragment
     public boolean onPreferenceChange(Preference preference, Object newValue) {
         if (preference == quickSwitchPref) {
             int value = Integer.parseInt((String) newValue);
-            Context context = getContext();
-            if (value == 0) {
-                Utils.toggleOverlay(context, WALLPAPER_OVERLAY, true);
-            } else if (value == 1) {
-                Utils.toggleOverlay(context, WALLPAPER_OVERLAY, false);
-            }
-            SystemRestartUtils.showSystemRestartDialog(getContext());
+            applyLauncherSelection(value);
             return true;
         }
         return false;
     }
 
+    private void applyLauncherSelection(int value) {
+        Context context = getContext();
+        if (context == null) return;
+        if (value == 0) {
+            Utils.toggleOverlay(context, WALLPAPER_OVERLAY, true);
+        } else if (value == 1) {
+            Utils.toggleOverlay(context, WALLPAPER_OVERLAY, false);
+        }
+        updateEnhancedSummary(value);
+        SystemRestartUtils.showSystemRestartDialog(context);
+    }
+
+    private void updateEnhancedSummary(int launcherValue) {
+        if (pixelLauncherEnhancedPref == null) return;
+        pixelLauncherEnhancedPref.setSummary(launcherValue == 1
+                ? R.string.pixel_launcher_enhanced_summary_active
+                : R.string.pixel_launcher_enhanced_summary_warning);
+    }
+
+    private void handlePixelLauncherEnhancedClick() {
+        Context context = getContext();
+        if (context == null) return;
+        int defaultLauncher = SystemProperties.getInt(QUICKSWITCH_KEY, 0);
+        if (defaultLauncher == 1) {
+            launchPixelLauncherEnhanced(context);
+            return;
+        }
+        new android.app.AlertDialog.Builder(context)
+                .setTitle(R.string.pixel_launcher_enhanced_warning_title)
+                .setMessage(R.string.pixel_launcher_enhanced_warning_message)
+                .setPositiveButton(R.string.pixel_launcher_enhanced_switch_action, (dialog, which) -> {
+                    SystemProperties.set(QUICKSWITCH_KEY, "1");
+                    if (quickSwitchPref != null) {
+                        quickSwitchPref.setValue("1");
+                    }
+                    applyLauncherSelection(1);
+                })
+                .setNegativeButton(R.string.pixel_launcher_enhanced_open_anyway, (dialog, which) ->
+                        launchPixelLauncherEnhanced(context))
+                .show();
+    }
+
+    private static void launchPixelLauncherEnhanced(Context context) {
+        android.content.Intent launchIntent =
+                context.getPackageManager().getLaunchIntentForPackage(PLE_PACKAGE);
+        if (launchIntent != null) {
+            launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(launchIntent);
+        }
+    }
+
+    private static boolean isPackageInstalled(Context context, String packageName) {
+        try {
+            return context.getPackageManager().getApplicationInfo(packageName, 0).enabled;
+        } catch (Exception e) {
+            return false;
+        }
+    }
     public static final SearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
             new BaseSearchIndexProvider() {
                 @Override

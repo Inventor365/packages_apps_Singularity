@@ -30,6 +30,12 @@
             android:summary="@string/quickswitch_launcher_summary" 
             android:fragment="org.lunaris.settings.fragments.miscellaneous.QuickSwitch" />
 
+        <!-- Pixel Launcher Enhancements -->
+        <Preference
+            android:key="pixel_launcher_enhanced"
+            android:title="@string/pixel_launcher_enhanced_title"
+            android:summary="@string/pixel_launcher_enhanced_summary_active" />
+
         <!-- Themes -->
         <Preference
             android:key="custom_system_theme"

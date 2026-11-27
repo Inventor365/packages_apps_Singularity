@@ -27,6 +27,11 @@
         android:entryValues="@array/quickswitch_launcher_values"
         android:summary="%s" />
 
+     <Preference
+        android:key="pixel_launcher_enhanced"
+        android:title="@string/pixel_launcher_enhanced_title"
+        android:summary="@string/pixel_launcher_enhanced_summary_active" />
+
      <!--<org.mist.settings.preferences.OverlaySwitchPreference
         android:key="com.android.system.qs.wallpaperoverlay"
         android:title="@string/wallpaper_overlay_title"
